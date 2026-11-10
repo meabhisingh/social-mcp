@@ -50,13 +50,18 @@ export function createServer(): McpServer {
     {
       title: "Post to Instagram",
       description:
-        "Publish through the Instagram Graph API: create a media container, upload a local Reel with the resumable upload when needed, then call media_publish. Photos need a public https image_url. Returns the Instagram media id and the local record id.",
+        "Publish through the Instagram Graph API: create a media container, upload a local Reel with the resumable upload when needed, then call media_publish. Optional collaborators are invited on the container before publish. Photos need a public https image_url. Returns the Instagram media id, the local record id, and invitesSent.",
       inputSchema: {
         content: z.string().max(2200).describe("Caption, at most 2200 characters.").default(""),
         mediaPath: z.string().min(1).describe("Local video path, or a public https image or video URL."),
         mediaType: instagramKind.optional().describe("image, reel, or story. Inferred from the file when omitted."),
         shareToFeed: z.boolean().optional().describe("For Reels, also share to the feed. Defaults to true."),
         altText: z.string().max(1000).optional().describe("Alt text for a photo."),
+        collaborators: z
+          .array(z.string().min(1).max(31))
+          .max(3)
+          .optional()
+          .describe("Instagram usernames to invite as collaborators. At most 3. Feed images and Reels only, not Stories. A leading @ is optional."),
       },
       annotations: { openWorldHint: true },
     },
@@ -97,6 +102,11 @@ export function createServer(): McpServer {
         mediaType: instagramKind.optional().describe("Instagram image, reel, or story."),
         shareToFeed: z.boolean().optional().describe("Share an Instagram Reel to the feed."),
         altText: z.string().max(1000).optional().describe("Instagram photo alt text."),
+        collaborators: z
+          .array(z.string().min(1).max(31))
+          .max(3)
+          .optional()
+          .describe("Instagram usernames to invite when the scheduled post runs. At most 3. Ignored unless platform is instagram. Not supported for Stories."),
       },
     },
     async (args) => guard(() => schedulePost(args)),

@@ -21,6 +21,8 @@ export type PostRecord = {
   mediaType?: InstagramKind;
   shareToFeed?: boolean;
   altText?: string;
+  collaborators?: string[];
+  invitesSent?: string[];
   platformId?: string;
   containerId?: string;
   mediaId?: string;
@@ -38,6 +40,7 @@ export type PublishResult = {
   publishedAt: string;
   containerId?: string;
   mediaId?: string;
+  invitesSent?: string[];
 };
 
 export type FetchLike = typeof fetch;

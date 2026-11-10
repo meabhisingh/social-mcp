@@ -62,7 +62,7 @@ YouTube accepts either `YOUTUBE_ACCESS_TOKEN` or the client id, client secret, a
 ## What the tools call
 
 - **YouTube:** `POST https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status`, then `PUT` the file to the returned session `Location` in chunks with `Content-Range`. A `308` response resumes from the `Range` header.
-- **Instagram:** `POST /{ig-user-id}/media` to create a container. Photos use `image_url`. Public videos use `video_url`. A local Reel uses `upload_type=resumable`, then `POST https://rupload.facebook.com/ig-api-upload/{version}/{container-id}` with `Authorization: OAuth`, `offset`, and `file_size`. The server polls `status_code` and then `POST /{ig-user-id}/media_publish` with `creation_id`. Local photos are not accepted: the Graph API fetches images from a public `https` URL.
+- **Instagram:** `POST /{ig-user-id}/media` to create a container. Photos use `image_url`. Public videos use `video_url`. A local Reel uses `upload_type=resumable`, then `POST https://rupload.facebook.com/ig-api-upload/{version}/{container-id}` with `Authorization: OAuth`, `offset`, and `file_size`. Optional `collaborators` on that container is a list of up to 3 Instagram usernames (feed images and Reels; Stories are not supported). The server polls `status_code` and then `POST /{ig-user-id}/media_publish` with `creation_id`. Local photos are not accepted: the Graph API fetches images from a public `https` URL.
 - **X:** `POST https://api.x.com/2/media/upload` with `command=INIT`, chunked `APPEND`, and `FINALIZE`, then `GET` `command=STATUS` while processing, then `POST https://api.x.com/2/tweets` with `media.media_ids`.
 
 YouTube privacy defaults to `private`.
@@ -72,16 +72,16 @@ YouTube privacy defaults to `private`.
 | Tool | What it does |
 | --- | --- |
 | `post_youtube` | Upload a local video now. |
-| `post_instagram` | Publish a photo URL or Reel now. |
+| `post_instagram` | Publish a photo URL or Reel now. Optional `collaborators` invites up to 3 usernames. |
 | `post_x` | Publish a post now. Media is optional. |
-| `schedule_post` | Save `platform`, `content`, `mediaPath`, and `runAt`. |
+| `schedule_post` | Save `platform`, `content`, `mediaPath`, and `runAt`. Instagram `collaborators` are stored and invited when the post runs. |
 | `list_scheduled_posts` | List posts still waiting. |
 | `get_post` | Fetch one local record by id. |
 | `cancel_scheduled_post` | Cancel a post that has not started. |
 | `run_due_posts` | Publish scheduled posts whose `runAt` is due. |
 | `list_published_posts` | List recent posts recorded as published. |
 
-A successful publish returns the platform id (`platformId`) and the local record id (`id`).
+A successful publish returns the platform id (`platformId`) and the local record id (`id`). An Instagram post also returns `invitesSent`, the usernames included on the container `collaborators` field before publish. The Graph API allows at most 3 collaborators on a feed image or Reel. Pass usernames with or without a leading `@`.
 
 ## Claude Desktop
 

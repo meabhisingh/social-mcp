@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { errorMessage, PlatformError, ValidationError } from "./errors.js";
 import { isImageMime, isVideoMime, resolveMedia, retainLocalMedia } from "./media.js";
-import { publishInstagram } from "./platforms/instagram.js";
+import { normalizeCollaborators, publishInstagram } from "./platforms/instagram.js";
 import { publishX } from "./platforms/x.js";
 import { publishYouTube } from "./platforms/youtube.js";
 import { getStoredPost, modifyPosts, readAllPosts, requirePost } from "./store.js";
@@ -37,6 +37,7 @@ export type InstagramPostInput = {
   mediaType?: InstagramKind;
   shareToFeed?: boolean;
   altText?: string;
+  collaborators?: string[];
 };
 
 export type XPostInput = {
@@ -57,6 +58,7 @@ export type ScheduleInput = {
   mediaType?: InstagramKind;
   shareToFeed?: boolean;
   altText?: string;
+  collaborators?: string[];
 };
 
 export async function postYouTube(input: YouTubePostInput, net?: NetDeps): Promise<PublishResult> {
@@ -84,6 +86,8 @@ export async function postInstagram(input: InstagramPostInput, net?: NetDeps): P
   if (input.altText && input.altText.length > 1000) {
     throw new ValidationError("Instagram alt text must be at most 1000 characters.");
   }
+  const collaborators = normalizeCollaborators(input.collaborators);
+  assertCollaboratorsAllowed(input.mediaType, collaborators);
   const media = await resolveMedia(input.mediaPath);
   assertInstagramMedia(media, input.mediaType);
   const record = await createRecord({
@@ -95,6 +99,7 @@ export async function postInstagram(input: InstagramPostInput, net?: NetDeps): P
     mediaType: input.mediaType,
     shareToFeed: input.shareToFeed,
     altText: input.altText,
+    collaborators,
   });
   return publishRecord(record, net);
 }
@@ -123,6 +128,11 @@ export async function schedulePost(input: ScheduleInput): Promise<PostRecord> {
     throw new ValidationError("YouTube categoryId must be numeric.");
   }
   assertScheduleContent(input);
+  const collaborators = input.platform === "instagram" ? normalizeCollaborators(input.collaborators) : [];
+  if (input.platform !== "instagram" && input.collaborators && input.collaborators.length > 0) {
+    throw new ValidationError("Collaborator invites are only supported for Instagram.");
+  }
+  assertCollaboratorsAllowed(input.mediaType, collaborators);
   const media = await resolveMedia(input.mediaPath);
   if (input.platform === "youtube") {
     if (media.kind !== "file" || !isVideoMime(media.mime)) {
@@ -147,6 +157,7 @@ export async function schedulePost(input: ScheduleInput): Promise<PostRecord> {
     mediaType: input.platform === "instagram" ? input.mediaType : undefined,
     shareToFeed: input.platform === "instagram" ? input.shareToFeed : undefined,
     altText: input.platform === "instagram" ? input.altText : undefined,
+    collaborators: input.platform === "instagram" ? collaborators : undefined,
   });
 }
 
@@ -191,6 +202,7 @@ export type DueResult = {
     status: "published" | "failed";
     platformId?: string;
     error?: string;
+    invitesSent?: string[];
   }>;
 };
 
@@ -213,7 +225,13 @@ export async function runDuePosts(options?: { now?: Date; limit?: number; net?: 
   for (const post of claimed) {
     try {
       const result = await publishRecord(post, options?.net);
-      ran.push({ id: result.id, platform: result.platform, status: "published", platformId: result.platformId });
+      ran.push({
+        id: result.id,
+        platform: result.platform,
+        status: "published",
+        platformId: result.platformId,
+        ...(result.invitesSent ? { invitesSent: result.invitesSent } : {}),
+      });
     } catch (error) {
       const message = errorMessage(error);
       ran.push({ id: post.id, platform: post.platform, status: "failed", error: message });
@@ -236,6 +254,7 @@ async function publishRecord(record: PostRecord, net?: NetDeps): Promise<Publish
         updatedAt: publishedAt,
         ...(published.containerId ? { containerId: published.containerId } : {}),
         ...(published.mediaId ? { mediaId: published.mediaId } : {}),
+        ...(published.invitesSent ? { invitesSent: published.invitesSent } : {}),
         error: undefined,
       };
     });
@@ -247,6 +266,7 @@ async function publishRecord(record: PostRecord, net?: NetDeps): Promise<Publish
       publishedAt,
       ...(published.containerId ? { containerId: published.containerId } : {}),
       ...(published.mediaId ? { mediaId: published.mediaId } : {}),
+      ...(published.invitesSent ? { invitesSent: published.invitesSent } : {}),
     };
   } catch (error) {
     const message = errorMessage(error);
@@ -266,7 +286,7 @@ async function publishRecord(record: PostRecord, net?: NetDeps): Promise<Publish
 async function dispatch(
   record: PostRecord,
   net?: NetDeps,
-): Promise<{ platformId: string; containerId?: string; mediaId?: string }> {
+): Promise<{ platformId: string; containerId?: string; mediaId?: string; invitesSent?: string[] }> {
   if (record.platform === "youtube") {
     const media = await requireLocalVideo(record.mediaPath);
     const result = await publishYouTube(
@@ -293,10 +313,11 @@ async function dispatch(
         mediaType: record.mediaType,
         shareToFeed: record.shareToFeed,
         altText: record.altText,
+        collaborators: record.collaborators,
       },
       net,
     );
-    return { platformId: result.platformId, containerId: result.containerId };
+    return { platformId: result.platformId, containerId: result.containerId, invitesSent: result.invitesSent };
   }
   const media = record.mediaPath ? await requireXFile(record.mediaPath) : undefined;
   const result = await publishX({ text: record.content, media }, net);
@@ -318,6 +339,7 @@ type Draft = {
   mediaType?: InstagramKind;
   shareToFeed?: boolean;
   altText?: string;
+  collaborators?: string[];
 };
 
 async function createRecord(draft: Draft): Promise<PostRecord> {
@@ -347,6 +369,7 @@ async function createRecord(draft: Draft): Promise<PostRecord> {
   if (draft.mediaType !== undefined) record.mediaType = draft.mediaType;
   if (draft.shareToFeed !== undefined) record.shareToFeed = draft.shareToFeed;
   if (draft.altText !== undefined) record.altText = draft.altText;
+  if (draft.collaborators && draft.collaborators.length > 0) record.collaborators = draft.collaborators;
   await modifyPosts((posts) => {
     posts.push(record);
   });
@@ -382,6 +405,12 @@ async function requireXFile(mediaPath: string) {
     throw new ValidationError("X media must be an image or a video.");
   }
   return media;
+}
+
+function assertCollaboratorsAllowed(mediaType: InstagramKind | undefined, collaborators: readonly string[]): void {
+  if (mediaType === "story" && collaborators.length > 0) {
+    throw new ValidationError("Instagram Stories do not support collaborator invites. Use a feed image or Reel.");
+  }
 }
 
 function assertInstagramMedia(media: MediaRef, mediaType: InstagramKind | undefined): void {

@@ -166,6 +166,7 @@ test("instagram image uses container then publish", async () => {
       assert.equal(params.get("access_token"), "ig-token-value");
       assert.equal(params.get("image_url"), "https://cdn.example.com/pic.jpg");
       assert.equal(params.get("caption"), "Hello");
+      assert.deepEqual(JSON.parse(params.get("collaborators") ?? "[]"), ["Alice", "bob"]);
       response.end(JSON.stringify({ id: "container-img" }));
       return;
     }
@@ -177,6 +178,7 @@ test("instagram image uses container then publish", async () => {
     if (url.pathname.endsWith("/media_publish")) {
       const params = new URLSearchParams(body);
       assert.equal(params.get("creation_id"), "container-img");
+      assert.equal(params.get("collaborators"), null);
       response.end(JSON.stringify({ id: "ig-media-1" }));
       return;
     }
@@ -186,11 +188,19 @@ test("instagram image uses container then publish", async () => {
   try {
     const media = await resolveMedia("https://cdn.example.com/pic.jpg");
     const result = await publishInstagram(
-      { caption: "Hello", media, mediaType: "image", shareToFeed: undefined, altText: undefined },
+      {
+        caption: "Hello",
+        media,
+        mediaType: "image",
+        shareToFeed: undefined,
+        altText: undefined,
+        collaborators: ["@Alice", "bob", "alice"],
+      },
       { fetchImpl: localFetch(server.origin), instagramGraphBase: `${server.origin}/v22.0` },
     );
     assert.equal(result.platformId, "ig-media-1");
     assert.equal(result.containerId, "container-img");
+    assert.deepEqual(result.invitesSent, ["Alice", "bob"]);
     assert.deepEqual(calls, [
       "POST /v22.0/ig-user/media",
       "GET /v22.0/container-img",
@@ -222,6 +232,7 @@ test("instagram reel uploads local bytes then publishes the container", async ()
       assert.equal(params.get("upload_type"), "resumable");
       assert.equal(params.get("media_type"), "REELS");
       assert.equal(params.get("share_to_feed"), "true");
+      assert.deepEqual(JSON.parse(params.get("collaborators") ?? "[]"), ["reel.pal"]);
       response.setHeader("Content-Type", "application/json");
       response.end(JSON.stringify({ id: "container-vid", uri: `http://${host}/ig-api-upload/v22.0/container-vid` }));
       return;
@@ -249,7 +260,7 @@ test("instagram reel uploads local bytes then publishes the container", async ()
   });
   try {
     const result = await publishInstagram(
-      { caption: "Reel", media, mediaType: "reel", shareToFeed: true, altText: undefined },
+      { caption: "Reel", media, mediaType: "reel", shareToFeed: true, altText: undefined, collaborators: ["reel.pal"] },
       {
         fetchImpl: localFetch(server.origin),
         instagramGraphBase: `${server.origin}/v22.0`,

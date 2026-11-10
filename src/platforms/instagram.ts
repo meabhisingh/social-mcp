@@ -9,18 +9,52 @@ const DEFAULT_VERSION = "v22.0";
 const DEFAULT_HOST = "graph.facebook.com";
 const DEFAULT_TIMEOUT_MS = 180_000;
 
+/** Graph API media-container limit for the collaborators field. */
+export const INSTAGRAM_COLLABORATOR_LIMIT = 3;
+
+const COLLABORATOR_USERNAME = /^(?!.*\.\.)(?!\.)(?!.*\.$)[A-Za-z0-9._]{1,30}$/;
+
 export type InstagramPublishInput = {
   caption: string;
   media: MediaRef;
   mediaType: InstagramKind | undefined;
   shareToFeed: boolean | undefined;
   altText: string | undefined;
+  collaborators?: readonly string[];
 };
+
+/**
+ * Normalize collaborator usernames for the media container.
+ * Strips a leading @, drops case-insensitive duplicates, and rejects more than the API allows.
+ */
+export function normalizeCollaborators(values: readonly string[] | undefined): string[] {
+  if (!values || values.length === 0) return [];
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of values) {
+    const trimmed = raw.trim().replace(/^@+/, "");
+    if (!COLLABORATOR_USERNAME.test(trimmed)) {
+      throw new ValidationError(
+        `Instagram collaborator "${raw.trim()}" is not a username. Use 1-30 letters, numbers, periods, or underscores, and do not start, end, or repeat a period.`,
+      );
+    }
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(trimmed);
+  }
+  if (normalized.length > INSTAGRAM_COLLABORATOR_LIMIT) {
+    throw new ValidationError(
+      `Instagram allows at most ${INSTAGRAM_COLLABORATOR_LIMIT} collaborators on a media container.`,
+    );
+  }
+  return normalized;
+}
 
 export async function publishInstagram(
   input: InstagramPublishInput,
   net: NetDeps = {},
-): Promise<{ platformId: string; containerId: string }> {
+): Promise<{ platformId: string; containerId: string; invitesSent: string[] }> {
   const fetchImpl = net.fetchImpl ?? globalThis.fetch;
   const token = requireToken();
   const userId = requireUserId();
@@ -28,7 +62,11 @@ export async function publishInstagram(
   const graphBase = net.instagramGraphBase ?? `https://${graphHost()}/${version}`;
   const uploadBase = net.instagramUploadBase ?? "https://rupload.facebook.com";
   const kind = resolveKind(input.media, input.mediaType);
+  const collaborators = normalizeCollaborators(input.collaborators);
   const secrets = [token];
+  if (kind === "story" && collaborators.length > 0) {
+    throw new ValidationError("Instagram Stories do not support collaborator invites. Use a feed image or Reel.");
+  }
 
   if (kind === "image" && input.media.kind !== "url") {
     throw new ValidationError(
@@ -47,13 +85,13 @@ export async function publishInstagram(
     );
   }
 
-  const container = await createContainer(fetchImpl, graphBase, userId, token, input, kind, secrets);
+  const container = await createContainer(fetchImpl, graphBase, userId, token, input, kind, collaborators, secrets);
   if (input.media.kind === "file") {
     await uploadLocalVideo(fetchImpl, uploadBase, version, container.id, container.uri, input.media.path, input.media.size, token, secrets);
   }
   await waitUntilFinished(fetchImpl, graphBase, container.id, token, secrets);
   const platformId = await publishContainer(fetchImpl, graphBase, userId, container.id, token, secrets);
-  return { platformId, containerId: container.id };
+  return { platformId, containerId: container.id, invitesSent: collaborators };
 }
 
 function requireToken(): string {
@@ -119,11 +157,13 @@ async function createContainer(
   token: string,
   input: InstagramPublishInput,
   kind: InstagramKind,
+  collaborators: readonly string[],
   secrets: string[],
 ): Promise<{ id: string; uri: string | undefined }> {
   const params = new URLSearchParams();
   params.set("access_token", token);
   if (input.caption.trim()) params.set("caption", input.caption);
+  if (collaborators.length > 0) params.set("collaborators", JSON.stringify([...collaborators]));
   const remoteImage = input.media.kind === "url" && (kind === "image" || (kind === "story" && input.media.mime?.startsWith("image/")));
   if (remoteImage) {
     if (input.media.kind !== "url") throw new ValidationError("Instagram image containers require an https image_url.");

@@ -3,11 +3,13 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { ValidationError } from "../src/errors.js";
+import { normalizeCollaborators } from "../src/platforms/instagram.js";
 import {
   cancelScheduled,
   getPost,
   listPublished,
   listScheduled,
+  postInstagram,
   postX,
   postYouTube,
   runDuePosts,
@@ -183,6 +185,96 @@ test("post now rejects a photo for youtube and returns the local id when upload 
     await server.close();
     await removeDir(root);
     await removeDir(outside);
+  }
+});
+
+test("instagram collaborators are validated, stored, and invited when a due post runs", async () => {
+  assert.deepEqual(normalizeCollaborators([" @Ada ", "ada", "Bob"]), ["Ada", "Bob"]);
+  assert.throws(() => normalizeCollaborators(["bad name"]), ValidationError);
+  assert.throws(() => normalizeCollaborators(["one", "two", "three", "four"]), /at most 3/);
+  assert.throws(() => normalizeCollaborators([".leading"]), ValidationError);
+
+  const root = await tempDir("social-mcp-ig-collab-");
+  const restore = isolateEnv({
+    SOCIAL_MCP_DATA_DIR: root,
+    INSTAGRAM_ACCESS_TOKEN: "ig-token-value",
+    INSTAGRAM_USER_ID: "ig-user",
+  });
+  const invited: string[][] = [];
+  const server = await listen(async (request, response) => {
+    const host = request.headers.host ?? "127.0.0.1";
+    const url = new URL(request.url ?? "/", `http://${host}`);
+    const body = (await readBody(request)).toString();
+    response.setHeader("Content-Type", "application/json");
+    if (request.method === "POST" && url.pathname.endsWith("/media")) {
+      const params = new URLSearchParams(body);
+      invited.push(JSON.parse(params.get("collaborators") ?? "[]") as string[]);
+      response.end(JSON.stringify({ id: "container-due" }));
+      return;
+    }
+    if (request.method === "GET") {
+      response.end(JSON.stringify({ status_code: "FINISHED" }));
+      return;
+    }
+    assert.equal(new URLSearchParams(body).get("collaborators"), null);
+    response.end(JSON.stringify({ id: "ig-media-due" }));
+  });
+  try {
+    await assert.rejects(
+      () =>
+        schedulePost({
+          platform: "instagram",
+          content: "Story",
+          mediaPath: "https://cdn.example.com/pic.jpg",
+          mediaType: "story",
+          runAt: "2020-01-01T00:00:00Z",
+          collaborators: ["Ada"],
+        }),
+      /Stories do not support/,
+    );
+    await assert.rejects(
+      () =>
+        schedulePost({
+          platform: "youtube",
+          title: "No",
+          content: "",
+          mediaPath: "https://cdn.example.com/pic.jpg",
+          runAt: "2020-01-01T00:00:00Z",
+          collaborators: ["Ada"],
+        }),
+      /only supported for Instagram/,
+    );
+    const scheduled = await schedulePost({
+      platform: "instagram",
+      content: "With friends",
+      mediaPath: "https://cdn.example.com/pic.jpg",
+      runAt: "2020-01-01T00:00:00Z",
+      collaborators: ["@Ada", "Bob"],
+    });
+    assert.deepEqual(scheduled.collaborators, ["Ada", "Bob"]);
+    const stored = await getPost(scheduled.id);
+    assert.deepEqual(stored.collaborators, ["Ada", "Bob"]);
+    const ran = await runDuePosts({
+      now: new Date("2026-01-01T00:00:00Z"),
+      net: { fetchImpl: localFetch(server.origin), instagramGraphBase: `${server.origin}/v22.0` },
+    });
+    assert.equal(ran.ran[0]?.status, "published");
+    assert.equal(ran.ran[0]?.platformId, "ig-media-due");
+    assert.deepEqual(ran.ran[0]?.invitesSent, ["Ada", "Bob"]);
+    const published = await postInstagram(
+      { content: "Now", mediaPath: "https://cdn.example.com/pic.jpg", collaborators: ["Ada"] },
+      { fetchImpl: localFetch(server.origin), instagramGraphBase: `${server.origin}/v22.0` },
+    );
+    assert.deepEqual(published.invitesSent, ["Ada"]);
+    assert.equal(published.platformId, "ig-media-due");
+    assert.deepEqual(invited, [
+      ["Ada", "Bob"],
+      ["Ada"],
+    ]);
+  } finally {
+    restore();
+    await server.close();
+    await removeDir(root);
   }
 });
 
