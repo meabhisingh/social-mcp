@@ -30,6 +30,40 @@ npm run due -- --watch
 
 The one-shot runner prints a JSON report to stdout and exits with status 1 if any due post failed. The server and the runner load a `.env` file from the working directory when a variable is not already set. Do not commit `.env`.
 
+## Native binary
+
+`npm run compile` builds one native executable with Node's single executable application flow (`node --experimental-sea-config`). The build machine needs Node.js 22 or newer. The binary includes the Node runtime, so running it does not need a Node install.
+
+```bash
+npm install
+npm run compile
+./dist/social-mcp
+```
+
+On Windows the file is `dist/social-mcp.exe`. The script bundles the server, generates a preparation blob, copies the Node binary, and injects the blob with `postject`. `dist/` is gitignored. Do not commit the binary.
+
+The executable loads `.env` from the working directory the same way as `npm start`, and it speaks MCP on stdio. Logs stay on stderr.
+
+```bash
+./dist/social-mcp due
+./dist/social-mcp due --watch
+```
+
+`due` runs scheduled posts once. `--watch` keeps running them (with or without the `due` argument). Claude Desktop can launch the binary directly:
+
+```json
+{
+  "mcpServers": {
+    "social-mcp": {
+      "command": "/ABSOLUTE/PATH/TO/social-mcp/dist/social-mcp",
+      "env": {
+        "SOCIAL_MCP_DATA_DIR": "/ABSOLUTE/PATH/TO/social-mcp/data"
+      }
+    }
+  }
+}
+```
+
 ## Environment variables
 
 Copy `.env.example` to `.env` and set only the platforms you use. Blank values are ignored.

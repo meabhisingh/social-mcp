@@ -1,5 +1,8 @@
 node_modules/
 dist/
+/social-mcp
+/social-mcp.exe
+/sea-prep.blob
 data/
 .env
 .env.*
